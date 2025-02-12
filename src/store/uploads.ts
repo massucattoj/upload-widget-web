@@ -9,16 +9,19 @@ import { compressImage } from '../utils/compress-image'
 export type Upload = {
   name: string
   file: File
-  abortController: AbortController
+  abortController?: AbortController
   status: 'progress' | 'success' | 'error' | 'cancelled'
   originalSizeInBytes: number
   uploadSizeInBytes: number
+  compressedSizeInBytes?: number
+  remoteUrl?: string
 }
 
 type UploadState = {
   uploads: Map<string, Upload>
   addUploads: (files: File[]) => void
   cancelUpload: (uploadId: string) => void
+  retryUpload: (uploadId: string) => void
 }
 
 enableMapSet()
@@ -48,35 +51,43 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
         return
       }
 
+      const abortController = new AbortController()
+
+      // every time we call processUpload we call with a fresh upload object
+      updateUpload(uploadId, {
+        uploadSizeInBytes: 0,
+        remoteUrl: undefined,
+        compressedSizeInBytes: undefined,
+        abortController,
+        status: 'progress',
+      })
+
       try {
         const compressedFile = await compressImage({
           file: upload.file,
-          maxWidth: 200,
-          maxHeight: 200,
-          quality: 0.5,
+          maxWidth: 1000,
+          maxHeight: 1000,
+          quality: 0.8,
         })
 
-        await uploadFileToStorage(
+        updateUpload(uploadId, { compressedSizeInBytes: compressedFile.size })
+
+        const { url } = await uploadFileToStorage(
           {
-            file: upload.file,
+            file: compressedFile,
             onProgress(sizeInBytes) {
               updateUpload(uploadId, {
                 uploadSizeInBytes: sizeInBytes,
               })
             },
           },
-          { signal: upload.abortController.signal }
+          { signal: abortController?.signal }
         )
 
-        updateUpload(uploadId, {
-          status: 'success',
-        })
+        updateUpload(uploadId, { status: 'success', remoteUrl: url })
       } catch (err) {
         if (err instanceof CanceledError) {
-          updateUpload(uploadId, {
-            status: 'cancelled',
-          })
-
+          updateUpload(uploadId, { status: 'cancelled' })
           return
         }
 
@@ -94,7 +105,12 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
         return
       }
 
-      upload.abortController.abort() // Abort the request (Http request)
+      upload.abortController?.abort() // Abort the request (Http request)
+    }
+
+    // Retry an upload
+    function retryUpload(uploadId: string) {
+      processUpload(uploadId)
     }
 
     // Add uploads
@@ -102,12 +118,10 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
       console.log(files)
       for (const file of files) {
         const uploadId = crypto.randomUUID()
-        const abortController = new AbortController()
 
         const upload: Upload = {
           name: file.name,
           file,
-          abortController,
           status: 'progress',
           originalSizeInBytes: file.size,
           uploadSizeInBytes: 0,
@@ -125,6 +139,7 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
       uploads: new Map(),
       addUploads,
       cancelUpload,
+      retryUpload,
     }
   })
 )
@@ -144,8 +159,12 @@ export const usePendingUploads = () => {
       // if exist an upload in progress
       const { total, uploaded } = Array.from(store.uploads.values()).reduce(
         (acc, upload) => {
-          acc.total += upload.originalSizeInBytes
-          acc.uploaded += upload.uploadSizeInBytes
+          if (upload.compressedSizeInBytes) {
+            acc.uploaded += upload.compressedSizeInBytes
+          }
+
+          acc.total +=
+            upload.compressedSizeInBytes || upload.originalSizeInBytes
 
           return acc
         },

@@ -3,6 +3,7 @@ import { motion } from 'motion/react'
 
 import { Download, ImageUp, Link2, RefreshCcw, X } from 'lucide-react'
 import { type Upload, useUploads } from '../store/uploads'
+import { downloadUrl } from '../utils/download-url'
 import { formatBytes } from '../utils/format-bytes'
 import { Button } from './ui/button'
 
@@ -16,9 +17,14 @@ export function UploadWidgetUploadItem({
   uploadId,
 }: UploadWidgetUploadItemProps) {
   const cancelUpload = useUploads(state => state.cancelUpload)
+  const retryUpload = useUploads(store => store.retryUpload)
 
   const progress = Math.min(
-    Math.round((upload.uploadSizeInBytes * 100) / upload.originalSizeInBytes),
+    upload.compressedSizeInBytes
+      ? Math.round(
+          (upload.uploadSizeInBytes * 100) / upload.compressedSizeInBytes
+        )
+      : 0,
     100
   )
 
@@ -32,7 +38,7 @@ export function UploadWidgetUploadItem({
       <div className="flex flex-col gap-1">
         <span className="text-xs font-medium flex items-center gap-1">
           <ImageUp className="size-3 text-zinc-300" strokeWidth={1.5} />
-          <span>{upload.name}</span>
+          <span className="truncate max-w-[180px]">{upload.name}</span>
         </span>
 
         <span className="text-xxs text-zinc-400 flex gap-1.5 items-center">
@@ -41,8 +47,18 @@ export function UploadWidgetUploadItem({
           </span>
           <div className="size-1 rounded-full bg-zinc-700" />
           <span>
-            300KB
-            <span className="text-green-400 ml-1">-94%</span>
+            {formatBytes(upload.compressedSizeInBytes ?? 0)}
+            {upload.compressedSizeInBytes && (
+              <span className="text-green-400 ml-1">
+                -
+                {Math.round(
+                  ((upload.originalSizeInBytes - upload.compressedSizeInBytes) *
+                    100) /
+                    upload.originalSizeInBytes
+                )}
+                %
+              </span>
+            )}
           </span>
           <div className="size-1 rounded-full bg-zinc-700" />
 
@@ -70,13 +86,27 @@ export function UploadWidgetUploadItem({
         />
       </Progress.Root>
 
-      <div className="absolute top-2.5 right-2.5 flex items-center gap-1">
-        <Button disabled={upload.status !== 'success'} size="icon-sm">
+      <div className="absolute top-2 right-2 flex items-center gap-1">
+        <Button
+          size="icon-sm"
+          aria-disabled={!upload.remoteUrl}
+          onClick={() => {
+            if (upload.remoteUrl) {
+              downloadUrl(upload.remoteUrl)
+            }
+          }}
+        >
           <Download className="size-4" strokeWidth={1.5} />
           <span className="sr-only">Download compressed image</span>
         </Button>
 
-        <Button disabled={upload.status !== 'success'} size="icon-sm">
+        <Button
+          disabled={!upload.remoteUrl}
+          size="icon-sm"
+          onClick={() =>
+            upload.remoteUrl && navigator.clipboard.writeText(upload.remoteUrl)
+          }
+        >
           <Link2 className="size-4" strokeWidth={1.5} />
           <span className="sr-only">Copy remote URL</span>
         </Button>
@@ -84,6 +114,7 @@ export function UploadWidgetUploadItem({
         <Button
           disabled={!['cancelled', 'error'].includes(upload.status)}
           size="icon-sm"
+          onClick={() => retryUpload(uploadId)}
         >
           <RefreshCcw className="size-4" strokeWidth={1.5} />
           <span className="sr-only">Retry upload</span>
