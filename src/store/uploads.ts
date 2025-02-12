@@ -1,3 +1,4 @@
+import { CanceledError } from 'axios'
 import { enableMapSet } from 'immer'
 import { create } from 'zustand'
 import { immer } from 'zustand/middleware/immer'
@@ -6,11 +7,16 @@ import { uploadFileToStorage } from '../http/upload-file-to-storage'
 export type Upload = {
   name: string
   file: File
+  abortController: AbortController
+  status: 'progress' | 'success' | 'error' | 'cancelled'
+  originalSizeInBytes: number
+  uploadSizeInBytes: number
 }
 
 type UploadState = {
   uploads: Map<string, Upload>
   addUploads: (files: File[]) => void
+  cancelUpload: (uploadId: string) => void
 }
 
 enableMapSet()
@@ -24,17 +30,75 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
         return
       }
 
-      await uploadFileToStorage({ file: upload.file })
+      try {
+        await uploadFileToStorage(
+          {
+            file: upload.file,
+            onProgress(sizeInBytes) {
+              set(state => {
+                state.uploads.set(uploadId, {
+                  ...upload,
+                  uploadSizeInBytes: sizeInBytes,
+                  status: 'progress',
+                })
+              })
+            },
+          },
+          { signal: upload.abortController.signal }
+        )
+
+        set(state => {
+          state.uploads.set(uploadId, {
+            ...upload,
+            status: 'success',
+          })
+        })
+      } catch (err) {
+        if (err instanceof CanceledError) {
+          set(state => {
+            state.uploads.set(uploadId, {
+              ...upload,
+              status: 'cancelled',
+            })
+          })
+
+          return
+        }
+
+        set(state => {
+          state.uploads.set(uploadId, {
+            ...upload,
+            status: 'error',
+          })
+        })
+      }
     }
 
+    // Cancel an upload
+    async function cancelUpload(uploadId: string) {
+      const upload = get().uploads.get(uploadId)
+
+      if (!upload) {
+        return
+      }
+
+      upload.abortController.abort() // Abort the request (Http request)
+    }
+
+    // Add uploads
     function addUploads(files: File[]) {
       console.log(files)
       for (const file of files) {
         const uploadId = crypto.randomUUID()
+        const abortController = new AbortController()
 
         const upload: Upload = {
           name: file.name,
           file,
+          abortController,
+          status: 'progress',
+          originalSizeInBytes: file.size,
+          uploadSizeInBytes: 0,
         }
 
         set(state => {
@@ -48,6 +112,7 @@ export const useUploads = create<UploadState, [['zustand/immer', never]]>(
     return {
       uploads: new Map(),
       addUploads,
+      cancelUpload,
     }
   })
 )

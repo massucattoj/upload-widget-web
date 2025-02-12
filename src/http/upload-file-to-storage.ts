@@ -6,10 +6,18 @@ import axios from 'axios'
 
 interface UploadFileToStorageParams {
   file: File
+  onProgress: (sizeInBytes: number) => void
 }
 
-export async function uploadFileToStorage({ file }: UploadFileToStorageParams) {
-  // Enviar o arquivo para o servidor com um FormData
+interface UploadFileToStorageOpts {
+  signal?: AbortSignal
+}
+
+export async function uploadFileToStorage(
+  { file, onProgress }: UploadFileToStorageParams,
+  opts?: UploadFileToStorageOpts
+) {
+  // Send the file to the server as FormData
   const data = new FormData()
 
   data.append('file', file)
@@ -21,11 +29,12 @@ export async function uploadFileToStorage({ file }: UploadFileToStorageParams) {
       headers: {
         'Content-Type': 'multipart/form-data',
       },
+      signal: opts?.signal,
+      onUploadProgress(progressEvent) {
+        onProgress(progressEvent.loaded) // how much data has been uploaded to my backend
+      },
     }
   )
-
-  console.log('response', response.data)
-  console.log('url', response.data.url)
 
   return { url: response.data.url }
 }
